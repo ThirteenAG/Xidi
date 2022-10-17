@@ -21,6 +21,13 @@
 #include <stop_token>
 #include <thread>
 
+uint32_t* nMenuCheck = nullptr;
+uint8_t* bStateCheck = nullptr;
+extern "C" __declspec(dllexport) void SetScarfaceData(uint32_t* menu, uint8_t* state)
+{
+    nMenuCheck = menu;
+    bStateCheck = state;
+}
 
 namespace Xidi
 {
@@ -233,7 +240,19 @@ namespace Xidi
             // We can assume that something about the state has changed since the last refresh.
             const XINPUT_STATE kNewState = (ERROR_SUCCESS == newStateData.errorCode) ? newStateData.state : XINPUT_STATE();
 
-            SState newStateRaw = mapper.MapStatePhysicalToVirtual(kNewState.Gamepad);
+            std::wstring profile = L"Custom";
+            if (nMenuCheck != nullptr && bStateCheck != nullptr)
+            {
+                if (!*nMenuCheck)
+                {
+                    if (*bStateCheck)
+                        profile = L"InCar";
+                    else
+                        profile = L"OnFoot";
+                }
+            }
+
+            SState newStateRaw = mapper.GetByName(profile)->MapStatePhysicalToVirtual(kNewState.Gamepad);
 
             // Depending on what XInput controller elements the mapper is configured to take into consideration, there may not be a virtual controller state change here.
             // For example, an axis mapped to a button may have been moved, but if that does not affect the button pressed or unpressed decision then there is no change worth continuing with.
