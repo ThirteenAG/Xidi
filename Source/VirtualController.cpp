@@ -21,12 +21,14 @@
 #include <stop_token>
 #include <thread>
 
-uint32_t* nMenuCheck = nullptr;
-uint8_t* bStateCheck = nullptr;
-extern "C" __declspec(dllexport) void SetScarfaceData(uint32_t* menu, uint8_t* state)
+bool(*fnMenuCheck)() = nullptr;
+void** CharacterObject = nullptr;
+uint32_t PilotState = 0;
+extern "C" __declspec(dllexport) void SetScarfaceData(bool(*menu)(), void** player, uint32_t struct_offset)
 {
-    nMenuCheck = menu;
-    bStateCheck = state;
+    fnMenuCheck = menu;
+    CharacterObject = player;
+    PilotState = struct_offset;
 }
 
 namespace Xidi
@@ -241,14 +243,18 @@ namespace Xidi
             const XINPUT_STATE kNewState = (ERROR_SUCCESS == newStateData.errorCode) ? newStateData.state : XINPUT_STATE();
 
             std::wstring profile = L"Custom";
-            if (nMenuCheck != nullptr && bStateCheck != nullptr)
+            if (fnMenuCheck != nullptr && CharacterObject != nullptr)
             {
-                if (!*nMenuCheck)
+                if (!fnMenuCheck())
                 {
-                    if (*bStateCheck)
-                        profile = L"InCar";
-                    else
-                        profile = L"OnFoot";
+                    auto player = *(void**)CharacterObject;
+                    if (player != nullptr)
+                    {
+                        if (*(uint32_t*)(*(uint32_t*)CharacterObject + PilotState) > 0)
+                            profile = L"InCar";
+                        else
+                            profile = L"OnFoot";
+                    }
                 }
             }
 
