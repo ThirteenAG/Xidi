@@ -1,0 +1,70 @@
+name: Build and Release
+
+on:
+  push:
+    paths-ignore:
+      - "**/*.md"
+      - '**/*.txt'
+    branches:
+      - '**'
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - '**/*.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+
+    - name: Add msbuild to PATH
+      uses: microsoft/setup-msbuild@main
+
+    - name: Build Solution
+      run: |
+        msbuild -m Xidi.sln /property:Configuration=Release /property:Platform=Win32
+        msbuild -m Xidi.sln /property:Configuration=Release /property:Platform=x64
+
+    - name: Package Release
+      run: |
+        ./PackageRelease.bat
+
+    - name: Create Release Archive
+      run: |
+        7z a Xidi.zip ./Dist/*
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Xidi
+        path: |
+          Dist/*
+          !**/.gitkeep
+
+    - name: Upload Release
+      if: |
+        github.ref_name == 'master' &&
+        (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+        github.repository == 'ThirteenAG/Xidi'
+      uses: ncipollo/release-action@main
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        allowUpdates: false
+        name: Xidi
+        body: |
+          [https://github.com/samuelgr/Xidi](https://github.com/samuelgr/Xidi)
+        tag: latest
+        artifacts: Xidi.zip

@@ -236,6 +236,29 @@ namespace Xidi
     /// On detected state change, updates the internal data structure and notifies all waiting
     /// threads.
     /// @param [in] controllerIdentifier Identifier of the controller on which to operate.
+    
+    constexpr size_t kMaxCallbacks = 8;
+    std::array<std::atomic<const wchar_t* (*)()>, kMaxCallbacks> profileCallbacks{};
+    std::atomic<size_t> callbackCount{0};
+
+    extern "C" __declspec(dllexport) bool RegisterProfileCallback(const wchar_t* (*callback)())
+    {
+      if (!callback)
+          return false;
+
+      size_t currentCount = callbackCount.load(std::memory_order_acquire);
+      while (currentCount < kMaxCallbacks)
+      {
+        if (callbackCount.compare_exchange_weak(
+                currentCount, currentCount + 1, std::memory_order_release))
+        {
+          profileCallbacks[currentCount].store(callback, std::memory_order_release);
+          return true;
+        }
+      }
+      return false;
+    }
+    
     static void PollForPhysicalControllerStateChanges(TControllerIdentifier controllerIdentifier)
     {
       SPhysicalState newPhysicalState = physicalControllerState[controllerIdentifier].Get();
@@ -251,17 +274,52 @@ namespace Xidi
 
         if (true == physicalControllerState[controllerIdentifier].Update(newPhysicalState))
         {
-          const SState newRawVirtualState =
-              ((EPhysicalDeviceStatus::Ok == newPhysicalState.deviceStatus)
-                   ? Mapper::GetConfigured(controllerIdentifier)
-                         ->MapStatePhysicalToVirtual(
-                             newPhysicalState,
-                             OpaqueControllerSourceIdentifier(controllerIdentifier))
-                   : Mapper::GetConfigured(controllerIdentifier)
-                         ->MapNeutralPhysicalToVirtual(
-                             OpaqueControllerSourceIdentifier(controllerIdentifier)));
+          std::wstring profile;
+          size_t count = callbackCount.load(std::memory_order_acquire);
+          for (size_t i = 0; i < count; ++i)
+          {
+            auto callback = profileCallbacks[i].load(std::memory_order_acquire);
+            if (callback)
+            {
+              const wchar_t* result = callback();
+              if (result && result[0] != L'\0')
+              {
+                profile = result;
+                break;
+              }
+            }
+          }
 
-          rawVirtualControllerState[controllerIdentifier].Update(newRawVirtualState);
+          if (!profile.empty())
+          {
+            const SState newRawVirtualState =
+                ((EPhysicalDeviceStatus::Ok == newPhysicalState.deviceStatus)
+                     ? Mapper::GetConfigured(controllerIdentifier)
+                           ->GetByName(profile)
+                           ->MapStatePhysicalToVirtual(
+                               newPhysicalState,
+                               OpaqueControllerSourceIdentifier(controllerIdentifier))
+                     : Mapper::GetConfigured(controllerIdentifier)
+                           ->GetByName(profile)
+                           ->MapNeutralPhysicalToVirtual(
+                               OpaqueControllerSourceIdentifier(controllerIdentifier)));
+
+            rawVirtualControllerState[controllerIdentifier].Update(newRawVirtualState);
+          }
+          else
+          {
+            const SState newRawVirtualState =
+                ((EPhysicalDeviceStatus::Ok == newPhysicalState.deviceStatus)
+                     ? Mapper::GetConfigured(controllerIdentifier)
+                           ->MapStatePhysicalToVirtual(
+                               newPhysicalState,
+                               OpaqueControllerSourceIdentifier(controllerIdentifier))
+                     : Mapper::GetConfigured(controllerIdentifier)
+                           ->MapNeutralPhysicalToVirtual(
+                               OpaqueControllerSourceIdentifier(controllerIdentifier)));
+
+            rawVirtualControllerState[controllerIdentifier].Update(newRawVirtualState);
+          }
         }
       }
     }
