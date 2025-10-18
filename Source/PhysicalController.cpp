@@ -262,6 +262,7 @@ namespace Xidi
     static void PollForPhysicalControllerStateChanges(TControllerIdentifier controllerIdentifier)
     {
       SPhysicalState newPhysicalState = physicalControllerState[controllerIdentifier].Get();
+      std::wstring currentProfile; // Track the current profile
 
       while (true)
       {
@@ -274,7 +275,9 @@ namespace Xidi
 
         if (true == physicalControllerState[controllerIdentifier].Update(newPhysicalState))
         {
-          std::wstring profile;
+          std::wstring previousProfile = currentProfile; // Store previous profile
+          currentProfile.clear();                        // Reset for this iteration
+
           size_t count = callbackCount.load(std::memory_order_acquire);
           for (size_t i = 0; i < count; ++i)
           {
@@ -284,23 +287,33 @@ namespace Xidi
               const wchar_t* result = callback();
               if (result && result[0] != L'\0')
               {
-                profile = result;
+                currentProfile = result;
                 break;
               }
             }
           }
 
-          if (!profile.empty())
+          if (!currentProfile.empty())
           {
+            if (currentProfile != previousProfile)
+            {
+              const SState newRawVirtualState =
+                  Mapper::GetConfigured(controllerIdentifier)
+                      ->GetByName(previousProfile)
+                      ->MapNeutralPhysicalToVirtual(
+                          OpaqueControllerSourceIdentifier(controllerIdentifier));
+              rawVirtualControllerState[controllerIdentifier].Set(newRawVirtualState);
+            }
+
             const SState newRawVirtualState =
                 ((EPhysicalDeviceStatus::Ok == newPhysicalState.deviceStatus)
                      ? Mapper::GetConfigured(controllerIdentifier)
-                           ->GetByName(profile)
+                           ->GetByName(currentProfile)
                            ->MapStatePhysicalToVirtual(
                                newPhysicalState,
                                OpaqueControllerSourceIdentifier(controllerIdentifier))
                      : Mapper::GetConfigured(controllerIdentifier)
-                           ->GetByName(profile)
+                           ->GetByName(currentProfile)
                            ->MapNeutralPhysicalToVirtual(
                                OpaqueControllerSourceIdentifier(controllerIdentifier)));
 
