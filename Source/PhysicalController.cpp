@@ -231,11 +231,6 @@ namespace Xidi
         }
       }
     }
-
-    /// Periodically polls for physical controller state.
-    /// On detected state change, updates the internal data structure and notifies all waiting
-    /// threads.
-    /// @param [in] controllerIdentifier Identifier of the controller on which to operate.
     
     constexpr size_t kMaxCallbacks = 8;
     std::array<std::atomic<const wchar_t* (*)()>, kMaxCallbacks> profileCallbacks{};
@@ -259,6 +254,10 @@ namespace Xidi
       return false;
     }
     
+    /// Periodically polls for physical controller state.
+    /// On detected state change, updates the internal data structure and notifies all waiting
+    /// threads.
+    /// @param [in] controllerIdentifier Identifier of the controller on which to operate.
     static void PollForPhysicalControllerStateChanges(TControllerIdentifier controllerIdentifier)
     {
       SPhysicalState newPhysicalState = physicalControllerState[controllerIdentifier].Get();
@@ -508,6 +507,48 @@ namespace Xidi
 
             isInitialized = true;
           });
+    }
+
+    extern "C" __declspec(dllexport) bool XidiSendVibration(short controllerIndex, unsigned short leftMotorSpeed, unsigned short rightMotorSpeed)
+    {
+      Initialize();
+
+      TControllerIdentifier targetControllerIndex;
+
+      if (controllerIndex == -1)
+      {
+        targetControllerIndex = kPhysicalControllerCount; // Initialize to invalid value
+
+        for (TControllerIdentifier i = 0; i < kPhysicalControllerCount; ++i)
+        {
+          SPhysicalState currentState = physicalControllerState[i].Get();
+          if (currentState.deviceStatus == EPhysicalDeviceStatus::Ok)
+          {
+            targetControllerIndex = i;
+            break;
+          }
+        }
+
+        if (targetControllerIndex >= kPhysicalControllerCount)
+        {
+          return false;
+        }
+      }
+      else
+      {
+        if (controllerIndex < 0 || controllerIndex >= static_cast<short>(kPhysicalControllerCount))
+        {
+          return false;
+        }
+
+        targetControllerIndex = static_cast<TControllerIdentifier>(controllerIndex);
+      }
+
+      ForceFeedback::SPhysicalActuatorComponents vibration = {
+          .leftMotor = static_cast<ForceFeedback::TPhysicalActuatorValue>(leftMotorSpeed),
+          .rightMotor = static_cast<ForceFeedback::TPhysicalActuatorValue>(rightMotorSpeed)};
+
+      return WritePhysicalControllerVibration(targetControllerIndex, vibration);
     }
 
     SCapabilities GetControllerCapabilities(TControllerIdentifier controllerIdentifier)
