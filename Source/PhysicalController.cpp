@@ -233,14 +233,19 @@ namespace Xidi
     }
     
     constexpr size_t kMaxCallbacks = 8;
-    std::array<std::atomic<const wchar_t* (*)()>, kMaxCallbacks> profileCallbacks{};
-    std::atomic<size_t> callbackCount{0};
+    static std::pair<std::array<std::atomic<const wchar_t* (*)()>, kMaxCallbacks>&, std::atomic<size_t>&>
+        GetProfileCallbackStorage()
+    {
+      static std::array<std::atomic<const wchar_t* (*)()>, kMaxCallbacks> profileCallbacks{};
+      static std::atomic<size_t> callbackCount{0};
+      return {profileCallbacks, callbackCount};
+    }
 
-    extern "C" __declspec(dllexport) bool RegisterProfileCallback(const wchar_t* (*callback)())
+    extern "C" __declspec(dllexport) bool XidiRegisterProfileCallback(const wchar_t* (*callback)())
     {
       if (!callback)
           return false;
-
+      auto [profileCallbacks, callbackCount] = GetProfileCallbackStorage();
       size_t currentCount = callbackCount.load(std::memory_order_acquire);
       while (currentCount < kMaxCallbacks)
       {
@@ -276,6 +281,8 @@ namespace Xidi
         {
           std::wstring previousProfile = currentProfile; // Store previous profile
           currentProfile.clear();                        // Reset for this iteration
+
+          auto [profileCallbacks, callbackCount] = GetProfileCallbackStorage();
 
           size_t count = callbackCount.load(std::memory_order_acquire);
           for (size_t i = 0; i < count; ++i)

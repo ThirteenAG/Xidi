@@ -914,6 +914,137 @@ namespace Xidi
     FillHidCollectionName(objectInfo->tszName, _countof(objectInfo->tszName), hidCollectionNumber);
   }
 
+  /// Stores custom element labels that can be set externally via the API.
+  class ElementLabels
+  {
+  private:
+
+    static constexpr int kLabelMaxLength = 256;
+    static constexpr int kLabelCount = 20;
+
+    struct Label
+    {
+      char data[kLabelMaxLength];
+
+      Label()
+      {
+        data[0] = '\0';
+      }
+    };
+
+    Label labels[kLabelCount];
+
+  public:
+
+    ElementLabels() = default;
+
+    bool SetLabel(int index, const char* label)
+    {
+      if (index < 0 || index >= kLabelCount) return false;
+      if (nullptr == label) return false;
+
+      strncpy_s(labels[index].data, kLabelMaxLength, label, kLabelMaxLength - 1);
+      return true;
+    }
+
+    const char* GetLabel(int index) const
+    {
+      if (index < 0 || index >= kLabelCount) return "";
+      return labels[index].data;
+    }
+  };
+
+  static ElementLabels& GetElementLabelsStorage()
+  {
+    static ElementLabels instance;
+    return instance;
+  }
+
+  extern "C" __declspec(dllexport) void XidiSetButtonLabel(int index, const char* label)
+  {
+    if (nullptr != label) GetElementLabelsStorage().SetLabel(index, label);
+  }
+
+  /// Generates a default label string for a controller element when no custom mapping exists.
+  /// @tparam CharT Character type for the output string (char or wchar_t).
+  /// @param [in] element Controller element for which to generate a default label.
+  /// @return Default label string for the element.
+  template <typename CharT> static std::basic_string<CharT> GetDefaultElementLabel(
+      Controller::SElementIdentifier element)
+  {
+    CharT buf[32];
+    if constexpr (std::is_same_v<CharT, wchar_t>)
+    {
+      if (element.type == Controller::EElementType::Button)
+        swprintf_s(buf, L"Button %u", 1u + (unsigned)element.button);
+      else if (element.type == Controller::EElementType::Axis)
+        swprintf_s(buf, L"Axis %u", (unsigned)element.axis);
+      else
+        swprintf_s(buf, L"Unknown");
+    }
+    else
+    {
+      if (element.type == Controller::EElementType::Button)
+        sprintf_s(buf, "Button %u", 1u + (unsigned)element.button);
+      else if (element.type == Controller::EElementType::Axis)
+        sprintf_s(buf, "Axis %u", (unsigned)element.axis);
+      else
+        sprintf_s(buf, "Unknown");
+    }
+    return std::basic_string<CharT>(buf);
+  }
+
+  template <typename CharT> static std::basic_string<CharT> GetElementLabelFromMapper(
+      const Xidi::Controller::VirtualController& vc, Controller::SElementIdentifier element)
+  {
+    using namespace Xidi::Controller;
+
+    const Mapper* mapper = Mapper::GetConfigured(vc.GetIdentifier());
+    if (nullptr == mapper) return GetDefaultElementLabel<CharT>(element);
+
+    const auto& m = mapper->ElementMap().named;
+
+    const IElementMapper* mappers[] = {
+        m.stickLeftX.get(), m.stickLeftY.get(),  m.stickRightX.get(), m.stickRightY.get(),
+        m.dpadUp.get(),     m.dpadDown.get(),    m.dpadLeft.get(),    m.dpadRight.get(),
+        m.triggerLT.get(),  m.triggerRT.get(),   m.buttonA.get(),     m.buttonB.get(),
+        m.buttonX.get(),    m.buttonY.get(),     m.buttonLB.get(),    m.buttonRB.get(),
+        m.buttonBack.get(), m.buttonStart.get(), m.buttonLS.get(),    m.buttonRS.get(),
+    };
+
+    for (size_t idx = 0; idx < std::size(mappers); ++idx)
+    {
+      const IElementMapper* mapperPtr = mappers[idx];
+      if (!mapperPtr) continue;
+
+      const int targets = mapperPtr->GetTargetElementCount();
+      for (int i = 0; i < targets; ++i)
+      {
+        const auto maybeTarget = mapperPtr->GetTargetElementAt(i);
+        if (maybeTarget.has_value() && maybeTarget->type == element.type)
+        {
+          // Match both buttons and axes
+          if ((element.type == EElementType::Button && maybeTarget->button == element.button) ||
+              (element.type == EElementType::Axis && maybeTarget->axis == element.axis))
+          {
+            // Use custom label if available and non-empty
+            const std::string customLabel = GetElementLabelsStorage().GetLabel(static_cast<int>(idx));
+            if (!customLabel.empty())
+            {
+              if constexpr (std::is_same_v<CharT, wchar_t>)
+                return std::wstring(customLabel.begin(), customLabel.end());
+              else
+                return customLabel;
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback to generic format
+    return GetDefaultElementLabel<CharT>(element);
+  }
+
   /// Fills the specified object instance information structure with information about the specified
   /// controller element. Size member must already be initialized because multiple versions of the
   /// structure exist, so it is used to determine which members to fill in.
@@ -925,6 +1056,7 @@ namespace Xidi
   /// @param [in] offset Offset to place into the object instance information structure.
   /// @param [out] objectInfo Structure to be filled with instance information.
   template <EDirectInputVersion diVersion> static void FillObjectInstanceInfo(
+      const VirtualDirectInputDeviceBase<diVersion>& device,
       Controller::SCapabilities controllerCapabilities,
       Controller::SElementIdentifier controllerElement,
       TOffset offset,
@@ -951,6 +1083,19 @@ namespace Xidi
     objectInfo->dwType = GetObjectId(controllerCapabilities, controllerElement);
     VirtualDirectInputDeviceBase<diVersion>::ElementToString(
         controllerElement, objectInfo->tszName, _countof(objectInfo->tszName));
+
+    // Override button/axis name using the configured mapper.
+    if (controllerElement.type == Controller::EElementType::Button ||
+        controllerElement.type == Controller::EElementType::Axis)
+    {
+      using CharT = std::remove_extent_t<decltype(objectInfo->tszName)>;
+      const auto label =
+          GetElementLabelFromMapper<CharT>(device.GetVirtualController(), controllerElement);
+      if constexpr (std::is_same_v<CharT, wchar_t>)
+        wcsncpy_s(objectInfo->tszName, _countof(objectInfo->tszName), label.c_str(), _TRUNCATE);
+      else
+        strncpy_s(objectInfo->tszName, _countof(objectInfo->tszName), label.c_str(), _TRUNCATE);
+    }
 
     switch (controllerElement.type)
     {
@@ -1526,7 +1671,7 @@ namespace Xidi
 
           *objectDescriptor = {.dwSize = sizeof(*objectDescriptor)};
           FillObjectInstanceInfo<diVersion>(
-              controllerCapabilities, axisIdentifier, axisOffset, objectDescriptor.get());
+              *this, controllerCapabilities, axisIdentifier, axisOffset, objectDescriptor.get());
 
           const bool continueEnumerating =
               (DIENUM_STOP != lpCallback(objectDescriptor.get(), pvRef));
@@ -1550,7 +1695,7 @@ namespace Xidi
 
           *objectDescriptor = {.dwSize = sizeof(*objectDescriptor)};
           FillObjectInstanceInfo<diVersion>(
-              controllerCapabilities, buttonIdentifier, buttonOffset, objectDescriptor.get());
+              *this, controllerCapabilities, buttonIdentifier, buttonOffset, objectDescriptor.get());
 
           const bool continueEnumerating =
               (DIENUM_STOP != lpCallback(objectDescriptor.get(), pvRef));
@@ -1573,7 +1718,7 @@ namespace Xidi
 
           *objectDescriptor = {.dwSize = sizeof(*objectDescriptor)};
           FillObjectInstanceInfo<diVersion>(
-              controllerCapabilities, povIdentifier, povOffset, objectDescriptor.get());
+              *this, controllerCapabilities, povIdentifier, povOffset, objectDescriptor.get());
 
           const bool continueEnumerating =
               (DIENUM_STOP != lpCallback(objectDescriptor.get(), pvRef));
@@ -1898,6 +2043,7 @@ namespace Xidi
       LOG_INVOCATION_AND_RETURN(DIERR_INVALIDPARAM, kMethodSeverity);
 
     FillObjectInstanceInfo<diVersion>(
+        *this,
         controller->GetCapabilities(),
         element,
         ((true == IsApplicationDataFormatSet())
