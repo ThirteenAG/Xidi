@@ -16,4 +16,5 @@ set files_sdk_include=Include\Xidi\*.h
 
 set third_party_license=Hookshot Boost XstdBitSet
 
-call Modules\Infra\Build\Scripts\PackageRelease.bat
+set infra_command="Modules\Infra\Build\Scripts\PackageRelease.bat" %* 
+call %%infra_command%%
