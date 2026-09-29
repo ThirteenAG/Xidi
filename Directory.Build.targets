@@ -1,0 +1,9 @@
+<Project>
+  <!-- Fork extensions: make them visible in Visual Studio and add their unit tests to the test project, without modifying upstream project files. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)'=='Xidi' Or '$(MSBuildProjectName)'=='XidiTest'">
+    <ClInclude Include="$(MSBuildThisFileDirectory)Source\Extensions\*.inl" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)'=='XidiTest'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)Source\Test\Case\Extensions\*.cpp" />
+  </ItemGroup>
+</Project>

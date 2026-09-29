@@ -30,6 +30,8 @@
 #include "VirtualController.h"
 #include "VirtualDirectInputDevice.h"
 
+#include "Extensions/WrapperIDirectInput.inl"
+
 namespace Xidi
 {
   /// Contains all information required to intercept callbacks to EnumDevices.
@@ -473,8 +475,8 @@ namespace Xidi
       LPVOID pvRef,
       DWORD dwFlags)
   {
-    // Operation not supported.
-    return DIERR_UNSUPPORTED;
+    return Extensions::EnumDevicesBySemanticsFiltered<diVersion>(
+        this->underlyingDIObject, ptszUserName, lpdiActionFormat, lpCallback, pvRef, dwFlags);
   }
 
   template <EDirectInputVersion diVersion>

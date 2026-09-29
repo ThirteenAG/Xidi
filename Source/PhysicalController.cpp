@@ -34,6 +34,8 @@
 #include "VirtualController.h"
 #include "VirtualControllerTypes.h"
 
+#include "Extensions/PhysicalController.inl"
+
 namespace Xidi
 {
   namespace Controller
@@ -156,6 +158,7 @@ namespace Xidi
 
         if (true == Globals::DoesCurrentProcessHaveInputFocus())
         {
+          mapper = Extensions::ForceFeedbackMapper(controllerIdentifier, mapper);
           ForceFeedback::TEffectValue overallEffectGain = 10000;
           ForceFeedback::SPhysicalActuatorComponents physicalActuatorVector = {};
           ForceFeedback::TOrderedMagnitudeComponents virtualMagnitudeVector =
@@ -181,6 +184,7 @@ namespace Xidi
           }
 
           currentPhysicalActuatorValues = physicalActuatorVector;
+          Extensions::ApplyRequestedVibration(controllerIdentifier, currentPhysicalActuatorValues);
         }
         else
         {
@@ -207,6 +211,8 @@ namespace Xidi
     static void PollForPhysicalControllerStateChanges(TControllerIdentifier controllerIdentifier)
     {
       SPhysicalState newPhysicalState = physicalControllerState[controllerIdentifier].Get();
+      Extensions::ProfileSwitcher profileSwitcher(
+          controllerIdentifier, OpaqueControllerSourceIdentifier(controllerIdentifier));
 
       while (true)
       {
@@ -216,16 +222,18 @@ namespace Xidi
           Sleep(kPhysicalErrorBackoffPeriodMilliseconds);
 
         newPhysicalState = ReadPhysicalControllerState(controllerIdentifier);
+        const bool mapperChanged = profileSwitcher.Refresh(newPhysicalState);
 
-        if (true == physicalControllerState[controllerIdentifier].Update(newPhysicalState))
+        if ((true == physicalControllerState[controllerIdentifier].Update(newPhysicalState)) ||
+            (true == mapperChanged))
         {
           const SState newRawVirtualState =
               ((EPhysicalDeviceStatus::Ok == newPhysicalState.deviceStatus)
-                   ? Mapper::GetConfigured(controllerIdentifier)
+                   ? profileSwitcher.GetMapper()
                          ->MapStatePhysicalToVirtual(
                              newPhysicalState,
                              OpaqueControllerSourceIdentifier(controllerIdentifier))
-                   : Mapper::GetConfigured(controllerIdentifier)
+                   : profileSwitcher.GetMapper()
                          ->MapNeutralPhysicalToVirtual(
                              OpaqueControllerSourceIdentifier(controllerIdentifier)));
 

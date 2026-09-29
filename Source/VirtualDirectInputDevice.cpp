@@ -36,6 +36,8 @@
 #include "VirtualControllerTypes.h"
 #include "VirtualDirectInputEffect.h"
 
+#include "Extensions/VirtualDirectInputDevice.inl"
+
 /// Logs a DirectInput interface method invocation and returns.
 #define LOG_INVOCATION_AND_RETURN(result, severity)                                                        \
   do                                                                                                       \
@@ -1527,6 +1529,8 @@ namespace Xidi
           *objectDescriptor = {.dwSize = sizeof(*objectDescriptor)};
           FillObjectInstanceInfo<diVersion>(
               controllerCapabilities, axisIdentifier, axisOffset, objectDescriptor.get());
+          Extensions::ApplyCustomElementLabel(
+              controller->GetIdentifier(), axisIdentifier, objectDescriptor->tszName);
 
           const bool continueEnumerating =
               (DIENUM_STOP != lpCallback(objectDescriptor.get(), pvRef));
@@ -1551,6 +1555,8 @@ namespace Xidi
           *objectDescriptor = {.dwSize = sizeof(*objectDescriptor)};
           FillObjectInstanceInfo<diVersion>(
               controllerCapabilities, buttonIdentifier, buttonOffset, objectDescriptor.get());
+          Extensions::ApplyCustomElementLabel(
+              controller->GetIdentifier(), buttonIdentifier, objectDescriptor->tszName);
 
           const bool continueEnumerating =
               (DIENUM_STOP != lpCallback(objectDescriptor.get(), pvRef));
@@ -1904,6 +1910,7 @@ namespace Xidi
              ? dataFormat->GetOffsetForElement(element).value_or(DataFormat::kInvalidOffsetValue)
              : NativeOffsetForElement(element)),
         pdidoi);
+    Extensions::ApplyCustomElementLabel(controller->GetIdentifier(), element, pdidoi->tszName);
     LOG_INVOCATION_AND_RETURN(DI_OK, kMethodSeverity);
   }
 
