@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -37,6 +38,50 @@ namespace Xidi
   {
     namespace Extensions
     {
+      // Published by each controller's existing polling thread, before mapping.
+      // Timestamps share GetTickCount64's clock with application keyboard/mouse input.
+      static std::array<std::atomic<uint64_t>, kVirtualControllerMaxCount> lastControllerActivity{};
+
+      class ControllerActivityTracker
+      {
+      public:
+        bool Sample(SPhysicalState state)
+        {
+          if (EPhysicalDeviceStatus::Ok != state.deviceStatus)
+          {
+            previous = {};
+            return false;
+          }
+          // Reject centered-stick drift and quantize analog noise, including triggers.
+          for (size_t stick = 0; stick < state.stick.size(); stick += 2)
+          {
+            auto& x = state.stick[stick];
+            auto& y = state.stick[stick + 1];
+            const int64_t deadzone = (stick == 0) ? 7849 : 8689;
+            if (int64_t(x) * x + int64_t(y) * y <= deadzone * deadzone)
+              x = y = 0;
+            else
+            {
+              x = int16_t(x / 1024 * 1024);
+              y = int16_t(y / 1024 * 1024);
+            }
+          }
+          for (auto& trigger : state.trigger)
+            trigger = (trigger < 30) ? 0 : uint8_t(trigger / 8 * 8);
+
+          bool activity = (state.button & ~previous.button).any();
+          for (size_t i = 0; i < state.stick.size(); ++i)
+            activity |= (state.stick[i] != 0 && state.stick[i] != previous.stick[i]);
+          for (size_t i = 0; i < state.trigger.size(); ++i)
+            activity |= (state.trigger[i] != 0 && state.trigger[i] != previous.trigger[i]);
+          previous = state;
+          return activity;
+        }
+
+      private:
+        SPhysicalState previous{};
+      };
+
       /// Application-supplied callback that selects the mapper to use by returning its name.
       /// Returning `nullptr` or an empty string means the callback expresses no preference.
       using TProfileCallback = const wchar_t* (*)(void);
@@ -70,6 +115,18 @@ namespace Xidi
       /// `nullptr` if none has been requested. Written by the polling threads and read by the force
       /// feedback threads. Only ever points to registered mappers, which are never destroyed.
       static std::atomic<const Mapper*> requestedMappers[kVirtualControllerMaxCount];
+
+      // Copy stable registered mapper pointers, never a temporary composite mapper.
+      // This also preserves the per-element mappings held over during a profile switch.
+      static std::mutex promptMapperGuard;
+      static std::array<const Mapper*, kElementMapCount> promptMappers[kVirtualControllerMaxCount];
+
+      static void PublishPromptMappers(TControllerIdentifier id,
+          const std::array<const Mapper*, kElementMapCount>& mappers)
+      {
+        std::scoped_lock lock(promptMapperGuard);
+        promptMappers[id] = mappers;
+      }
 
       /// Vibration requested by the application for each specific physical controller, packed by
       /// #PackVibration.
@@ -141,6 +198,7 @@ namespace Xidi
               lastRequestedProfileMapper(configuredMapper)
         {
           elementMappers.fill(configuredMapper);
+          PublishPromptMappers(controllerIdentifier, elementMappers);
         }
 
         ProfileSwitcher(const ProfileSwitcher&) = delete;
@@ -162,6 +220,12 @@ namespace Xidi
         /// be recomputed even if physical controller state is unchanged, `false` otherwise.
         bool Refresh(const SPhysicalState& physicalState)
         {
+          const bool activity = activityTracker.Sample(physicalState);
+          if (EPhysicalDeviceStatus::Ok != physicalState.deviceStatus)
+            lastControllerActivity[controllerIdentifier].store(0, std::memory_order_relaxed);
+          else if (activity)
+            lastControllerActivity[controllerIdentifier].store(GetTickCount64(), std::memory_order_relaxed);
+
           // Callbacks run application code, so they are invoked only while there is a connected
           // controller whose input actually needs to be mapped.
           if (EPhysicalDeviceStatus::Ok == physicalState.deviceStatus)
@@ -198,6 +262,7 @@ namespace Xidi
           }
 
           hasHeldOverElements = elementHeldOver;
+          PublishPromptMappers(controllerIdentifier, elementMappers);
 
           if (false == hasHeldOverElements)
           {
@@ -217,6 +282,8 @@ namespace Xidi
         }
 
       private:
+
+        ControllerActivityTracker activityTracker;
 
         /// Determines whether an analog stick is deflected far enough to count as held.
         static constexpr bool IsStickHeld(int16_t valueX, int16_t valueY, int32_t threshold)
@@ -517,4 +584,45 @@ extern "C" __declspec(dllexport) bool XidiSendVibration(
   return (
       EPhysicalDeviceStatus::Ok ==
       GetCurrentPhysicalControllerState(controllerIdentifier).deviceStatus);
+}
+
+/// Returns a bitmask of physical elements feeding a virtual button in the current effective
+/// profile. Button index is zero-based; bit positions match XidiSetButtonLabel. Zero means
+/// unmapped/unavailable. No game callbacks are invoked on the caller's thread.
+extern "C" __declspec(dllexport) uint32_t XidiGetPhysicalButtonMask(unsigned int controllerIndex, unsigned int buttonIndex)
+{
+  using namespace Xidi::Controller;
+  using namespace Xidi::Controller::Extensions;
+  if (controllerIndex >= kVirtualControllerMaxCount || buttonIndex >= static_cast<unsigned int>(EButton::Count)) return 0;
+  std::array<const Mapper*, kElementMapCount> snapshot;
+  {
+    std::scoped_lock lock(promptMapperGuard);
+    snapshot = promptMappers[controllerIndex];
+  }
+  uint32_t mask = 0;
+  for (unsigned int i = 0; i < kElementMapCount; ++i)
+  {
+    if (nullptr == snapshot[i]) continue;
+    const auto* element = snapshot[i]->ElementMap().all[i].get();
+    if (nullptr == element) continue;
+    for (int j = 0; j < element->GetTargetElementCount(); ++j)
+    {
+      const auto target = element->GetTargetElementAt(j);
+      if (target && target->type == EElementType::Button && static_cast<unsigned int>(target->button) == buttonIndex)
+        mask |= uint32_t(1) << i;
+    }
+  }
+  return mask;
+}
+
+/// GetTickCount64 timestamp of the last button press or deliberate analog movement, before
+/// profile mapping. Works with every configured backend, including non-XInput controllers.
+/// Returns 0 for no activity, a disconnected controller, or an invalid zero-based index.
+/// Reads an atomic snapshot only: never polls hardware or invokes application callbacks.
+extern "C" __declspec(dllexport) uint64_t XidiGetLastControllerActivity(unsigned int controllerIndex)
+{
+  using namespace Xidi::Controller;
+  using namespace Xidi::Controller::Extensions;
+  if (controllerIndex >= kVirtualControllerMaxCount) return 0;
+  return lastControllerActivity[controllerIndex].load(std::memory_order_relaxed);
 }

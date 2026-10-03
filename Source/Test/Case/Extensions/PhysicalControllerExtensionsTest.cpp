@@ -70,6 +70,70 @@ namespace XidiTest
     return physicalState;
   }
 
+  TEST_CASE(ControllerActivity_ButtonsAndDisconnect)
+  {
+    Extensions::ControllerActivityTracker tracker;
+    TEST_ASSERT(false == tracker.Sample(NeutralPhysicalState()));
+    TEST_ASSERT(true == tracker.Sample(PhysicalStateWithButton(EPhysicalButton::A)));
+    TEST_ASSERT(false == tracker.Sample(PhysicalStateWithButton(EPhysicalButton::A)));
+    TEST_ASSERT(false == tracker.Sample(NeutralPhysicalState()));
+    TEST_ASSERT(true == tracker.Sample(PhysicalStateWithButton(EPhysicalButton::Y)));
+    TEST_ASSERT(false == tracker.Sample({.deviceStatus = EPhysicalDeviceStatus::NotConnected}));
+    TEST_ASSERT(false == tracker.Sample(NeutralPhysicalState()));
+    TEST_ASSERT(true == tracker.Sample(PhysicalStateWithButton(EPhysicalButton::Y)));
+  }
+
+  TEST_CASE(ControllerActivity_AnalogNoiseAndMovement)
+  {
+    Extensions::ControllerActivityTracker tracker;
+    auto state = NeutralPhysicalState();
+    state[EPhysicalStick::LeftX] = 400;
+    state[EPhysicalStick::RightY] = -600;
+    state[EPhysicalTrigger::LT] = 10;
+    TEST_ASSERT(false == tracker.Sample(state));
+    state[EPhysicalStick::LeftX] = 16000;
+    TEST_ASSERT(true == tracker.Sample(state));
+    state[EPhysicalStick::LeftX] = 16001;
+    TEST_ASSERT(false == tracker.Sample(state));
+    state[EPhysicalStick::LeftX] = 20000;
+    TEST_ASSERT(true == tracker.Sample(state));
+    TEST_ASSERT(false == tracker.Sample(NeutralPhysicalState()));
+    state = NeutralPhysicalState();
+    state[EPhysicalTrigger::RT] = 80;
+    TEST_ASSERT(true == tracker.Sample(state));
+    state[EPhysicalTrigger::RT] = 81;
+    TEST_ASSERT(false == tracker.Sample(state));
+    state[EPhysicalTrigger::RT] = 120;
+    TEST_ASSERT(true == tracker.Sample(state));
+    TEST_ASSERT(false == tracker.Sample(NeutralPhysicalState()));
+    state[EPhysicalStick::RightY] = -20000;
+    TEST_ASSERT(true == tracker.Sample(state));
+  }
+
+  TEST_CASE(ControllerActivity_ApiUsesPhysicalControllerIndices)
+  {
+    const Mapper mapper(L"ActivityTest", {});
+    ProfileSwitcher first(0, 0), second(1, 1);
+    RequestProfile(nullptr);
+    first.Refresh({.deviceStatus = EPhysicalDeviceStatus::NotConnected});
+    second.Refresh({.deviceStatus = EPhysicalDeviceStatus::NotConnected});
+    TEST_ASSERT(XidiGetLastControllerActivity(0) == 0);
+    TEST_ASSERT(XidiGetLastControllerActivity(1) == 0);
+    TEST_ASSERT(XidiGetLastControllerActivity(kVirtualControllerMaxCount) == 0);
+    first.Refresh(NeutralPhysicalState());
+    TEST_ASSERT(XidiGetLastControllerActivity(0) == 0);
+    second.Refresh(PhysicalStateWithButton(EPhysicalButton::X));
+    const auto timestamp = XidiGetLastControllerActivity(1);
+    TEST_ASSERT(timestamp > 0 && timestamp <= GetTickCount64());
+    TEST_ASSERT(XidiGetLastControllerActivity(0) == 0);
+    second.Refresh(PhysicalStateWithButton(EPhysicalButton::X));
+    TEST_ASSERT(XidiGetLastControllerActivity(1) == timestamp);
+    second.Refresh(NeutralPhysicalState());
+    TEST_ASSERT(XidiGetLastControllerActivity(1) == timestamp);
+    second.Refresh({.deviceStatus = EPhysicalDeviceStatus::Error});
+    TEST_ASSERT(XidiGetLastControllerActivity(1) == 0);
+  }
+
   /// Maps a physical state using the mapper currently selected by a profile switcher.
   static SState MapWith(const ProfileSwitcher& profileSwitcher, SPhysicalState physicalState)
   {
@@ -78,6 +142,49 @@ namespace XidiTest
   }
 
   // With no profile requested, the configured mapper is used and nothing changes.
+  TEST_CASE(ProfileSwitcher_PromptBindings_FollowEffectiveProfile)
+  {
+    const Mapper mapperA(L"PromptBindingsA",
+        {.buttonA = std::make_unique<ButtonMapper>(EButton::B1),
+         .buttonRB = std::make_unique<ButtonMapper>(EButton::B6)});
+    const Mapper mapperB(L"PromptBindingsB",
+        {.triggerRT = std::make_unique<ButtonMapper>(EButton::B1),
+         .buttonRB = std::make_unique<ButtonMapper>(EButton::B2)});
+    ProfileSwitcher switcher(kTestControllerIdentifier, kTestSourceIdentifier);
+    RequestProfile(L"PromptBindingsA");
+    switcher.Refresh(NeutralPhysicalState());
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 0) == (1u << ELEMENT_MAP_INDEX_OF(buttonA)));
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 5) == (1u << ELEMENT_MAP_INDEX_OF(buttonRB)));
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 15) == 0);
+    TEST_ASSERT(XidiGetPhysicalButtonMask(kVirtualControllerMaxCount, 0) == 0);
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 16) == 0);
+
+    RequestProfile(L"PromptBindingsB");
+    switcher.Refresh(PhysicalStateWithButton(EPhysicalButton::RB));
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 0) == (1u << ELEMENT_MAP_INDEX_OF(triggerRT)));
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 5) == (1u << ELEMENT_MAP_INDEX_OF(buttonRB)));
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 1) == 0);
+    switcher.Refresh(NeutralPhysicalState());
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 5) == 0);
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 1) == (1u << ELEMENT_MAP_INDEX_OF(buttonRB)));
+    RequestProfile(nullptr);
+    switcher.Refresh(NeutralPhysicalState());
+  }
+
+  TEST_CASE(ProfileSwitcher_PromptBindings_ReportAllSources)
+  {
+    const Mapper mapper(L"PromptBindingsMultiple",
+        {.buttonA = std::make_unique<ButtonMapper>(EButton::B1),
+         .buttonB = std::make_unique<ButtonMapper>(EButton::B1)});
+    ProfileSwitcher switcher(kTestControllerIdentifier, kTestSourceIdentifier);
+    RequestProfile(L"PromptBindingsMultiple");
+    switcher.Refresh(NeutralPhysicalState());
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 0) ==
+        ((1u << ELEMENT_MAP_INDEX_OF(buttonA)) | (1u << ELEMENT_MAP_INDEX_OF(buttonB))));
+    RequestProfile(nullptr);
+    switcher.Refresh(NeutralPhysicalState());
+  }
+
   TEST_CASE(ProfileSwitcher_NoPreference_UsesConfiguredMapper)
   {
     RequestProfile(nullptr);
