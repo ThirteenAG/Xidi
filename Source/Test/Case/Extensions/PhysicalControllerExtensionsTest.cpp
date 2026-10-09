@@ -185,6 +185,32 @@ namespace XidiTest
     switcher.Refresh(NeutralPhysicalState());
   }
 
+  TEST_CASE(ProfileSwitcher_PromptBindings_QueryInactiveProfile)
+  {
+    const Mapper menu(L"PromptQueryMenu",
+        {.buttonA = std::make_unique<ButtonMapper>(EButton::B1)});
+    const Mapper gameplay(L"PromptQueryGameplay",
+        {.triggerRT = std::make_unique<ButtonMapper>(EButton::B1),
+         .buttonRB = std::make_unique<ButtonMapper>(EButton::B6)});
+    ProfileSwitcher switcher(kTestControllerIdentifier, kTestSourceIdentifier);
+    RequestProfile(L"PromptQueryMenu");
+    switcher.Refresh(NeutralPhysicalState());
+    TEST_ASSERT(XidiGetPhysicalButtonMaskForProfile(0, 0, L"PromptQueryGameplay") ==
+        (1u << ELEMENT_MAP_INDEX_OF(triggerRT)));
+    TEST_ASSERT(XidiGetPhysicalButtonMaskForProfile(0, 5, L"PromptQueryGameplay") ==
+        (1u << ELEMENT_MAP_INDEX_OF(buttonRB)));
+    TEST_ASSERT(XidiGetPhysicalButtonMaskForProfile(0, 15, L"PromptQueryGameplay") == 0);
+    TEST_ASSERT(XidiGetPhysicalButtonMaskForProfile(kVirtualControllerMaxCount, 0, L"PromptQueryGameplay") == 0);
+    TEST_ASSERT(XidiGetPhysicalButtonMaskForProfile(0, 16, L"PromptQueryGameplay") == 0);
+    // A read-only query must neither activate the requested profile nor publish its bindings.
+    TEST_ASSERT(switcher.GetMapper() == &menu);
+    TEST_ASSERT(XidiGetPhysicalButtonMask(0, 0) == (1u << ELEMENT_MAP_INDEX_OF(buttonA)));
+    TEST_ASSERT(XidiGetPhysicalButtonMaskForProfile(0, 0, L"MissingPromptProfile") ==
+        XidiGetPhysicalButtonMaskForProfile(0, 0, nullptr));
+    RequestProfile(nullptr);
+    switcher.Refresh(NeutralPhysicalState());
+  }
+
   TEST_CASE(ProfileSwitcher_NoPreference_UsesConfiguredMapper)
   {
     RequestProfile(nullptr);

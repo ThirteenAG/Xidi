@@ -2178,7 +2178,11 @@ namespace XidiTest
         GUID_Triangle,
         GUID_SawtoothUp,
         GUID_SawtoothDown,
-        GUID_CustomForce};
+        GUID_CustomForce,
+        GUID_Spring,
+        GUID_Damper,
+        GUID_Inertia,
+        GUID_Friction};
     std::set<GUID> actualSeenGuids;
 
     for (const auto& expectedSeenGuid : kExpectedSeenGuids)

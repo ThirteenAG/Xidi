@@ -653,7 +653,7 @@ namespace Xidi
 
     auto forceFeedbackEffectObjectCreatorIt = kForceFeedbackEffectObjectCreators.find(rguidEffect);
     if (kForceFeedbackEffectObjectCreators.cend() == forceFeedbackEffectObjectCreatorIt)
-      return nullptr;
+      return Extensions::ConditionEffectCreator<diVersion>(rguidEffect);
 
     return forceFeedbackEffectObjectCreatorIt->second;
   }
@@ -782,6 +782,7 @@ namespace Xidi
   /// @return DirectInput effect type constant that corresponds to the GUID, if it is recognized.
   static std::optional<DWORD> ForceFeedbackEffectType(REFGUID rguidEffect)
   {
+    if (const auto conditionType = Extensions::ConditionEffectType(rguidEffect)) return conditionType;
     if (rguidEffect == GUID_ConstantForce) return DIEFT_CONSTANTFORCE;
     if (rguidEffect == GUID_RampForce) return DIEFT_RAMPFORCE;
     if (rguidEffect == GUID_Square) return DIEFT_PERIODIC;
@@ -1454,6 +1455,10 @@ namespace Xidi
         }
       }
     }
+
+    if (const auto result = Extensions::EnumConditionEffects<diVersion>(
+            lpCallback, pvRef, dwEffType, &FillForceFeedbackEffectInfo<diVersion>))
+      LOG_INVOCATION_AND_RETURN(result.value(), kMethodSeverity);
 
     LOG_INVOCATION_AND_RETURN(DI_OK, kMethodSeverity);
   }

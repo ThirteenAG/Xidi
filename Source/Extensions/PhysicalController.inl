@@ -615,6 +615,33 @@ extern "C" __declspec(dllexport) uint32_t XidiGetPhysicalButtonMask(unsigned int
   return mask;
 }
 
+/// Resolves a named profile without activating it. Gameplay tutorials can describe the
+/// controls that will be active after closing a dialog while the menu mapper stays active.
+/// A missing profile uses the configured mapper, matching ProfileSwitcher::Refresh.
+extern "C" __declspec(dllexport) uint32_t XidiGetPhysicalButtonMaskForProfile(
+    unsigned int controllerIndex, unsigned int buttonIndex, const wchar_t* profileName)
+{
+  using namespace Xidi::Controller;
+  using namespace Xidi::Controller::Extensions;
+  if (controllerIndex >= kVirtualControllerMaxCount || buttonIndex >= static_cast<unsigned int>(EButton::Count)) return 0;
+  const auto* mapper = profileName ? Mapper::GetByName(profileName) : nullptr;
+  if (nullptr == mapper) mapper = Mapper::GetConfigured(static_cast<TControllerIdentifier>(controllerIndex));
+  if (nullptr == mapper) return 0;
+  uint32_t mask = 0;
+  for (unsigned int i = 0; i < kElementMapCount; ++i)
+  {
+    const auto* element = mapper->ElementMap().all[i].get();
+    if (nullptr == element) continue;
+    for (int j = 0; j < element->GetTargetElementCount(); ++j)
+    {
+      const auto target = element->GetTargetElementAt(j);
+      if (target && target->type == EElementType::Button && static_cast<unsigned int>(target->button) == buttonIndex)
+        mask |= uint32_t(1) << i;
+    }
+  }
+  return mask;
+}
+
 /// GetTickCount64 timestamp of the last button press or deliberate analog movement, before
 /// profile mapping. Works with every configured backend, including non-XInput controllers.
 /// Returns 0 for no activity, a disconnected controller, or an invalid zero-based index.
